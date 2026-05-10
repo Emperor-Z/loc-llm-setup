@@ -1,0 +1,23 @@
+### Open Interpreter — swift profile
+### qwen2.5-coder:3b via local Ollama (fast, full GPU)
+
+llm:
+  model: "ollama/qwen2.5-coder:3b"
+  api_base: "http://localhost:11434"
+  context_window: 4096
+  max_tokens: 1024
+  temperature: 0.1
+  supports_functions: false
+  supports_vision: false
+
+computer:
+  import_computer_api: false
+
+custom_instructions: "Use `bash` language blocks for all shell commands (ls, cat, python, etc). Never try to execute shell output as Python code. When you read a file with cat, the output is text to read — not code to run. Keep responses concise."
+
+safe_mode: "ask"
+auto_run: false
+offline: true
+disable_telemetry: true
+
+version: 0.2.5

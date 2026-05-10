@@ -1,0 +1,154 @@
+#!/home/z/.venvs/memory/bin/python3
+"""
+Unified memory-aware chat wrapper for local Ollama models.
+Usage: llm-chat <model-ollama-name> <display-name>
+"""
+
+import sys
+import os
+import warnings
+import logging
+
+# silence everything before any imports
+warnings.filterwarnings("ignore")
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GLOG_minloglevel"] = "2"
+os.environ["CHROMA_TELEMETRY"] = "FALSE"
+logging.disable(logging.CRITICAL)
+
+# redirect fd2 at OS level during noisy imports (chromadb writes direct to fd)
+import io
+_devnull = open(os.devnull, 'w')
+_old_fd2 = os.dup(2)
+os.dup2(_devnull.fileno(), 2)
+try:
+    import ollama
+    from mem0 import Memory
+finally:
+    os.dup2(_old_fd2, 2)
+    os.close(_old_fd2)
+    _devnull.close()
+
+MODEL = sys.argv[1]      # e.g. qwen2.5-coder:7b
+DISPLAY = sys.argv[2]    # e.g. forge
+USER_ID = "arjun"
+
+MEM_CONFIG = {
+    "embedder": {
+        "provider": "ollama",
+        "config": {
+            "model": "nomic-embed-text",
+            "ollama_base_url": "http://localhost:11434"
+        }
+    },
+    "vector_store": {
+        "provider": "chroma",
+        "config": {
+            "collection_name": "local_llm_memory",
+            "path": os.path.expanduser("~/.local/share/mem0")
+        }
+    },
+    "llm": {
+        "provider": "ollama",
+        "config": {
+            "model": MODEL,
+            "ollama_base_url": "http://localhost:11434"
+        }
+    }
+}
+
+def silence_fd2():
+    devnull = open(os.devnull, 'w')
+    old = os.dup(2)
+    os.dup2(devnull.fileno(), 2)
+    return old, devnull
+
+def restore_fd2(old, devnull):
+    os.dup2(old, 2)
+    os.close(old)
+    devnull.close()
+
+def load_memory(query):
+    try:
+        old, devnull = silence_fd2()
+        mem = Memory.from_config(MEM_CONFIG)
+        restore_fd2(old, devnull)
+        results = mem.search(query=query, filters={"user_id": USER_ID}, limit=5)
+        entries = results.get("results", [])
+        if not entries:
+            return mem, ""
+        lines = "\n".join(f"- {e['memory']}" for e in entries)
+        return mem, f"Relevant things you remember about the user:\n{lines}"
+    except Exception:
+        return None, ""
+
+def save_memory(mem, messages):
+    if mem is None:
+        return
+    try:
+        if mem is True:
+            old, devnull = silence_fd2()
+            mem = Memory.from_config(MEM_CONFIG)
+            restore_fd2(old, devnull)
+        mem.add(messages, user_id=USER_ID)
+    except Exception:
+        pass
+
+def chat():
+    print(f"\n[{DISPLAY}] Local model with memory. Type 'exit' to quit.\n")
+
+    messages = []
+    mem = None
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit", "bye"):
+            break
+
+        # Load relevant memories on first message
+        if not messages:
+            mem, memory_context = load_memory(user_input)
+            if memory_context:
+                messages.append({
+                    "role": "system",
+                    "content": memory_context
+                })
+
+        messages.append({"role": "user", "content": user_input})
+
+        # Stream response
+        print(f"\n{DISPLAY}: ", end="", flush=True)
+        response_text = ""
+        try:
+            stream = ollama.chat(model=MODEL, messages=messages, stream=True)
+            for chunk in stream:
+                token = chunk["message"]["content"]
+                print(token, end="", flush=True)
+                response_text += token
+        except Exception as e:
+            print(f"\n[Error: {e}]")
+            messages.pop()
+            continue
+
+        print("\n")
+        messages.append({"role": "assistant", "content": response_text})
+
+    # Save conversation to memory on exit
+    if messages:
+        # Strip system message before saving
+        convo = [m for m in messages if m["role"] != "system"]
+        if convo:
+            print(f"[{DISPLAY}] Saving to memory...", end=" ", flush=True)
+            save_memory(mem if mem else True, convo)
+            print("done.")
+
+if __name__ == "__main__":
+    chat()

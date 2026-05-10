@@ -1,0 +1,23 @@
+### Open Interpreter — sage profile
+### qwen3:4b via local Ollama (reasoning, logic, step-by-step)
+
+llm:
+  model: "ollama/qwen3:4b"
+  api_base: "http://localhost:11434"
+  context_window: 8192
+  max_tokens: 2048
+  temperature: 0.1
+  supports_functions: false
+  supports_vision: false
+
+computer:
+  import_computer_api: false
+
+custom_instructions: "Use `bash` language blocks for all shell commands (ls, cat, python, etc). Never try to execute shell output as Python code. When you read a file with cat, the output is text to read — not code to run. Keep responses concise."
+
+safe_mode: "ask"
+auto_run: false
+offline: true
+disable_telemetry: true
+
+version: 0.2.5

@@ -1,0 +1,138 @@
+#!/home/z/.venvs/openinterp/bin/python3
+"""
+Open Interpreter with persistent mem0 memory.
+"""
+
+import os, sys, warnings, logging
+warnings.filterwarnings("ignore")
+logging.disable(logging.CRITICAL)
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["CHROMA_TELEMETRY"] = "FALSE"
+
+# silence noisy fd-level stderr during imports
+devnull = open(os.devnull, 'w')
+old_fd2 = os.dup(2)
+os.dup2(devnull.fileno(), 2)
+try:
+    from mem0 import Memory
+    from interpreter import interpreter
+finally:
+    os.dup2(old_fd2, 2)
+    os.close(old_fd2)
+    devnull.close()
+
+USER_ID = "arjun"
+MODEL   = "ollama/qwen2.5-coder:7b"
+
+MEM_CONFIG = {
+    "embedder": {
+        "provider": "ollama",
+        "config": {
+            "model": "nomic-embed-text",
+            "ollama_base_url": "http://localhost:11434"
+        }
+    },
+    "vector_store": {
+        "provider": "chroma",
+        "config": {
+            "collection_name": "local_llm_memory",
+            "path": os.path.expanduser("~/.local/share/mem0")
+        }
+    },
+    "llm": {
+        "provider": "ollama",
+        "config": {
+            "model": "qwen3:4b",
+            "ollama_base_url": "http://localhost:11434"
+        }
+    }
+}
+
+def silence():
+    d = open(os.devnull, 'w')
+    old = os.dup(2)
+    os.dup2(d.fileno(), 2)
+    return old, d
+
+def unsilence(old, d):
+    os.dup2(old, 2)
+    os.close(old)
+    d.close()
+
+def get_memory():
+    try:
+        old, d = silence()
+        mem = Memory.from_config(MEM_CONFIG)
+        unsilence(old, d)
+        results = mem.search(
+            query="user background preferences name projects",
+            filters={"user_id": USER_ID},
+            limit=8
+        )
+        entries = results.get("results", [])
+        lines = "\n".join(f"- {e['memory']}" for e in entries)
+        return mem, lines
+    except Exception:
+        return None, ""
+
+def save_memory(mem, messages):
+    if not mem or not messages:
+        return
+    try:
+        convo = [
+            m for m in messages
+            if m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)
+            and m.get("content", "").strip()
+        ]
+        if convo:
+            old, d = silence()
+            mem.add(convo, user_id=USER_ID)
+            unsilence(old, d)
+    except Exception:
+        pass
+
+# --- Load memory ---
+mem, memory_context = get_memory()
+
+# --- Configure OI ---
+interpreter.llm.model = MODEL
+interpreter.llm.api_base = "http://localhost:11434"
+interpreter.llm.context_window = 8192
+interpreter.llm.max_tokens = 2048
+interpreter.llm.temperature = 0.1
+interpreter.llm.supports_functions = False
+interpreter.llm.supports_vision = False
+interpreter.offline = True
+interpreter.auto_run = False
+interpreter.safe_mode = "ask"
+interpreter.disable_telemetry = True
+
+base = (
+    "Use `bash` language blocks for all shell commands. "
+    "Never re-execute shell output as Python code. "
+    "Be concise. Complete tasks in as few steps as possible. "
+    "IMPORTANT: If the answer is already in your memory notes, "
+    "respond directly — do NOT write or run any code to look it up. "
+    "For web scraping use requests + BeautifulSoup (both installed): "
+    "`import requests; from bs4 import BeautifulSoup`. "
+    "For JS-heavy sites that need a real browser, use the `browse` bash command: "
+    "`browse <url> [css_selector]`."
+)
+
+if memory_context:
+    interpreter.custom_instructions = base + f"\n\nMemory notes (treat as ground truth, answer from these directly):\n{memory_context}"
+else:
+    interpreter.custom_instructions = base
+
+# --- Run ---
+try:
+    interpreter.chat()
+except (KeyboardInterrupt, SystemExit, EOFError):
+    pass
+
+# --- Save conversation to memory ---
+print("\n[craft] Saving to memory...", end=" ", flush=True)
+save_memory(mem, interpreter.messages)
+print("done.")

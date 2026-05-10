@@ -1,0 +1,28 @@
+#!/home/z/.venvs/openinterp/bin/python3
+"""
+Minimal headless browser script craft can call.
+Usage: browse <url> [selector]
+"""
+import sys
+import asyncio
+
+async def run(url, selector=None):
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.goto(url, wait_until="domcontentloaded")
+        if selector:
+            elements = await page.query_selector_all(selector)
+            for i, el in enumerate(elements[:10]):
+                text = await el.text_content()
+                if text and text.strip():
+                    print(f"{i+1}. {text.strip()}")
+        else:
+            print(await page.title())
+            print(await page.inner_text("body"))
+        await browser.close()
+
+url = sys.argv[1] if len(sys.argv) > 1 else "https://example.com"
+selector = sys.argv[2] if len(sys.argv) > 2 else None
+asyncio.run(run(url, selector))
